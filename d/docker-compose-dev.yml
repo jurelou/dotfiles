@@ -1,0 +1,117 @@
+---
+volumes:
+  cpp-data:
+
+
+x-defaults: &defaults
+  restart: unless-stopped
+
+services:
+  frontend:
+    <<: *defaults
+    container_name: frontend
+    image: cpp-frontend-dev
+    build:
+      context: ./frontend
+      target: development
+    ports:
+      - 9200:9200
+      - 443:443
+    develop:
+      # https://docs.docker.com/compose/file-watch/#compose-watch-versus-bind-mounts
+      watch:
+        - action: sync
+          path: ./frontend
+          target: /src
+          ignore:
+            - node_modules
+            - dist
+            - frontend/node_modules
+            - frontend/dist
+        # Rebuild the image if dependencies change by checking uv.lock
+        - action: rebuild
+          path: ./uv.lock
+    command: /bin/sh -c "npm run dev"
+  
+  backend:
+    <<: *defaults
+    container_name: backend
+    image: cpp-backend-dev
+    build:
+      context: ./backend
+      target: development
+    # Include development dependencies when working locally
+    environment:
+      - UV_NO_DEV=0
+    ports:
+      - 8000:8000
+    develop:
+      # https://docs.docker.com/compose/file-watch/#compose-watch-versus-bind-mounts
+      watch:
+        - action: sync
+          path: ./backend
+          target: /src
+          ignore:
+            - .venv/
+            - backend/.venv
+        # Rebuild the image if dependencies change by checking uv.lock
+        - action: rebuild
+          path: ./backend/uv.lock
+    command: /bin/sh -c "uv run fastapi dev --host 0.0.0.0"
+
+  # mongo:
+  #   <<: *defaults
+  #   container_name: mongo
+  #   image: mongo
+  #   networks:
+  #     - mongo-compose-network
+  #   ports:
+  #     - 27017:27017
+  #   environment:
+  #     MONGO_INITDB_ROOT_USERNAME: root
+  #     MONGO_INITDB_ROOT_PASSWORD: root
+  #   volumes:
+  #     - mongo:/data/db/
+  #   healthcheck:
+  #     test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+
+  # mongo-express:
+  #   container_name: mongo-express
+  #   image: mongo-express
+  #   depends_on:
+  #     mongo:
+  #       condition: service_healthy
+  #       restart: true
+  #   networks:
+  #     - mongo-compose-network
+  #   environment:
+  #     - ME_CONFIG_MONGODB_SERVER=mongo
+  #     - ME_CONFIG_MONGODB_ADMINUSERNAME=root
+  #     - ME_CONFIG_MONGODB_ADMINPASSWORD=root
+  #     - ME_CONFIG_BASICAUTH_USERNAME=root
+  #     - ME_CONFIG_BASICAUTH_PASSWORD=root
+  #   ports:
+  #     - '8081:8081'
+  # keycloak:
+  #   <<: *defaults
+  #   image: quay.io/keycloak/keycloak:24.0.1
+  #   container_name: keycloak
+  #   environment:
+  #     # KC_HOSTNAME: 192.168.20.213
+  #     KC_HOSTNAME_PORT: 7080
+  #     KC_HOSTNAME_STRICT_BACKCHANNEL: "true"
+  #     KEYCLOAK_ADMIN: admin
+  #     KEYCLOAK_ADMIN_PASSWORD: admin
+  #     KC_HEALTH_ENABLED: "true"
+  #     KC_LOG_LEVEL: info
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:7080/health/ready"]
+  #     interval: 15s
+  #     timeout: 2s
+  #     retries: 15
+  #   command: ["start-dev", "--http-port", "7080", "--https-port", "7443"]
+  #   ports:
+  #     - "7080:7080"
+  #     - "7443:7443"
+
+

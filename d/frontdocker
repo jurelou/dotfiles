@@ -1,0 +1,17 @@
+FROM node:lts-alpine AS builder
+
+RUN npm i --location=global @quasar/cli@latest
+WORKDIR /src
+COPY . .
+
+FROM builder AS development
+RUN npm install
+# CMD ["npm", "run", "dev"]
+
+FROM development AS production-builder
+CMD ["quasar", "build", "-m", "pwa"]
+
+FROM nginx:stable-alpine AS production
+COPY --from=production-builder /src/dist/pwa /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
