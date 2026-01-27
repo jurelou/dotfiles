@@ -1,0 +1,20 @@
+<template>
+  <router-view />
+</template>
+
+<script setup>
+import { onMounted } from 'vue';
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
+
+defineOptions({ name: 'App' });
+
+onMounted(() => {
+  // Detect firefox via duck typing
+  if (typeof InstallTrigger !== 'undefined') {
+    console.log("Firefox detected !!!!")
+    router.push("/toto")
+  }
+})
+</script>
