@@ -64,6 +64,14 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+ThreadingHTTPServer(("127.0.0.1", 8000), Handler).serve_forever()
+
+
+
+
+
+
+
 
 
 
@@ -158,10 +166,6 @@ WantedBy=multi-user.target
 
 
 
-
-
-
-
 server {
     listen 80;
     server_name _;
@@ -174,9 +178,3 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
-
-
-
-
-  
-ThreadingHTTPServer(("127.0.0.1", 8000), Handler).serve_forever()
