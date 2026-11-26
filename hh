@@ -1,66 +1,182 @@
----
-# apt install pipx -> pipx install uv -> venv avec un vieux Python pour toto.
-#
-# Compatible Ansible 2.10 et versions récentes, cibles Debian 13.
-# Ansible < 2.18 ne sait pas utiliser le Python 3.13 de Debian 13 : les trois
-# premières étapes passent donc par raw (aucun Python requis sur la cible),
-# puis Ansible bascule sur le Python 3.8 installé par uv.
-#
-# Avec Ansible 2.10 :
-#   - gather_facts: false dans le play qui appelle ce rôle ;
-#   - ansible_python_interpreter: /usr/local/bin/python3.8 dans les group_vars
-#     des hôtes Debian 13, pour les plays suivants.
-#
-# Pour rendre ces valeurs surchargeables depuis l'inventaire, déplace-les dans defaults/main.yml.
+import json
+import os
+import threading
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-- name: pipx + uv + venv Python 3.8
-  vars:
-    uv_user: toto
-    uv_python_version: "3.8"
-    uv_venv_name: venv38        # créé dans le home de l'utilisateur
-    uv_python_bin: "/usr/local/bin/python{{ uv_python_version }}"
-  become: true
-  block:
-    - name: apt install pipx (+ acl, nécessaire pour become_user vers {{ uv_user }})
-      ansible.builtin.raw: >-
-        command -v pipx >/dev/null && command -v setfacl >/dev/null && echo DEJA_OK ||
-        { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq pipx acl; }
-      register: r_pipx
-      changed_when: "'DEJA_OK' not in r_pipx.stdout"
+USERS_FILE = os.environ.get("USERS_FILE", "users.json")
+LOG_FILE = os.environ.get("LOG_FILE", "requests.jsonl")
 
-    - name: pipx install uv (global -> /usr/local/bin/uv)
-      ansible.builtin.raw: >-
-        test -x /usr/local/bin/uv && echo DEJA_OK || pipx install --global uv
-      register: r_uv
-      changed_when: "'DEJA_OK' not in r_uv.stdout"
+with open(USERS_FILE) as f:
+    USERS = json.load(f)
 
-    - name: Python {{ uv_python_version }} via uv (partagé dans /opt/uv/python, lien {{ uv_python_bin }})
-      ansible.builtin.raw: >-
-        test -x {{ uv_python_bin }} && echo DEJA_OK ||
-        UV_PYTHON_INSTALL_DIR=/opt/uv/python UV_PYTHON_BIN_DIR=/usr/local/bin
-        /usr/local/bin/uv python install {{ uv_python_version }}
-      register: r_python
-      changed_when: "'DEJA_OK' not in r_python.stdout"
+log_lock = threading.Lock()
 
-    - name: Ansible < 2.18 utilise ce Python sur la cible
-      ansible.builtin.set_fact:
-        ansible_python_interpreter: "{{ uv_python_bin }}"
-      when: ansible_version.full is version('2.18', '<')
 
-    - name: Récupérer le home de {{ uv_user }}
-      ansible.builtin.getent:
-        database: passwd
-        key: "{{ uv_user }}"
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path.split("?")[0] != "/user":
+            return self.unknown()
+        username = None
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            if not 0 < length <= 4096:
+                raise ValueError
+            username = json.loads(self.rfile.read(length))["username"]
+            if not isinstance(username, str):
+                raise ValueError
+        except (ValueError, KeyError, TypeError):
+            return self.reply("user_lookup", 400, None)
+        if username not in USERS:
+            return self.reply("user_lookup", 404, username)
+        self.reply("user_lookup", 200, username, USERS[username])
 
-    - name: Créer le venv Python {{ uv_python_version }} de {{ uv_user }}
-      ansible.builtin.command:
-        cmd: >-
-          /usr/local/bin/uv venv --seed
-          --python {{ uv_python_bin }}
-          {{ uv_home }}/{{ uv_venv_name }}
-        creates: "{{ uv_home }}/{{ uv_venv_name }}/bin/python"
-      vars:
-        uv_home: "{{ ansible_facts['getent_passwd'][uv_user][4] }}"
-      environment:
-        HOME: "{{ uv_home }}"
-      become_user: "{{ uv_user }}"
+    def unknown(self):
+        self.reply("unknown_url", 404, None)
+
+    # Toute autre méthode (GET, PUT, DELETE, ...) = URL inconnue
+    def __getattr__(self, name):
+        if name.startswith("do_"):
+            return self.unknown
+        raise AttributeError(name)
+
+    def reply(self, event, status, username, data=None):
+        body = json.dumps(data).encode() if data is not None else b""
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            "ip": self.headers.get("X-Real-IP", self.client_address[0]),
+            "method": self.command,
+            "path": self.path.split("?")[0],
+            "username": username,
+            "status": status,
+        }
+        with log_lock, open(LOG_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def log_message(self, *args):  # pas de log texte sur stderr
+        pass
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[Unit]
+Description=user-api (Python stdlib)
+After=network.target
+
+[Service]
+Type=exec
+User=user-api
+Group=user-api
+WorkingDirectory=/opt/user-api
+Environment=USERS_FILE=/opt/user-api/users.json
+Environment=LOG_FILE=/var/log/user-api/requests.jsonl
+ExecStart=/usr/bin/python3 -I -B /opt/user-api/app.py
+Restart=on-failure
+RestartSec=2
+
+# Seul endroit inscriptible : /var/log/user-api (créé par systemd)
+LogsDirectory=user-api
+LogsDirectoryMode=0750
+UMask=0077
+
+# Système de fichiers
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+NoExecPaths=/
+ExecPaths=/usr
+
+# Noyau / système
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+PrivateIPC=yes
+PrivateUsers=yes
+
+# Privilèges
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+
+# Réseau : écoute uniquement 127.0.0.1:8000, ne parle qu'à localhost
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+SocketBindDeny=any
+SocketBindAllow=tcp:8000
+
+# Appels système
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+# Ressources
+MemoryMax=256M
+TasksMax=32
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+
+
+
+
+
+
+
+
+server {
+    listen 80;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+
+
+
+  
+ThreadingHTTPServer(("127.0.0.1", 8000), Handler).serve_forever()
