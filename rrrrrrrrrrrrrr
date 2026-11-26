@@ -28,6 +28,20 @@ location / {
 
 
 
+
+
+
+
+
+
+use Illuminate\Support\Facades\Crypt;
+
+$encrypted = Crypt::encryptString('ma valeur');
+
+
+
+
+
 [Unit]
 Description=user-api (FastAPI / uvicorn)
 After=network.target
