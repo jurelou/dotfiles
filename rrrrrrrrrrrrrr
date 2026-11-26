@@ -76,6 +76,37 @@ $encrypted = Crypt::encryptString('ma valeur');
 
 
 
+
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function runLongTask() {
+  for (let i = 1; i <= 10; i++) {
+    try {
+      await fetch(`https://www.google.com/${i}`, { mode: 'no-cors' });
+      console.log(`appel ${i} ok`);
+    } catch (e) {
+      console.log(`appel ${i} échoué`, e);
+    }
+    if (i < 10) await sleep(1000);
+  }
+  console.log('terminé');
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 [Unit]
 Description=user-api (FastAPI / uvicorn)
 After=network.target
