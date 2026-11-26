@@ -34,6 +34,40 @@ location / {
 
 
 
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import sys
+
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
+
+
+def laravel_decrypt(payload: str, app_key: str) -> str:
+    """Déchiffre une valeur produite par Crypt::encryptString() de Laravel."""
+    key = base64.b64decode(app_key.removeprefix("base64:"))
+    data = json.loads(base64.b64decode(payload))
+
+    mac = hmac.new(key, (data["iv"] + data["value"]).encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(mac, data["mac"]):
+        raise ValueError("MAC invalide : mauvaise APP_KEY ou donnée modifiée")
+
+    cipher = AES.new(key, AES.MODE_CBC, base64.b64decode(data["iv"]))
+    return unpad(cipher.decrypt(base64.b64decode(data["value"])), AES.block_size).decode()
+
+
+if __name__ == "__main__":
+    print(laravel_decrypt(sys.argv[1], os.environ["APP_KEY"]))
+
+
+
+
+
+
+
 use Illuminate\Support\Facades\Crypt;
 
 $encrypted = Crypt::encryptString('ma valeur');
