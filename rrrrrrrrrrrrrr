@@ -6,6 +6,13 @@ location / {
 }
 
 
+
+
+
+
+
+
+
         session()->forget('user_api');
 
         $url = config('services.user_api.url');
