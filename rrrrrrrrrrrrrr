@@ -1,3 +1,33 @@
+location / {
+    allow 10.0.0.4;   # IP du serveur Laravel
+    deny all;
+    proxy_pass http://127.0.0.1:8000;
+    ...
+}
+
+
+        session()->forget('user_api');
+
+        $url = config('services.user_api.url');
+        if (! $url) {
+            return; // service non configuré
+        }
+
+        try {
+            $response = Http::timeout(3)->post($url.'/user', [
+                'username' => $event->user->email, // champ à adapter (username, email...)
+            ]);
+
+            if ($response->ok()) {
+                session(['user_api' => $response->json()]);
+            }
+        } catch (Throwable $e) {
+            report($e); // noté dans storage/logs/laravel.log, la connexion continue
+        }
+    }
+
+
+
 [Unit]
 Description=user-api (FastAPI / uvicorn)
 After=network.target
