@@ -1,0 +1,141 @@
+[Unit]
+Description=user-api (FastAPI / uvicorn)
+After=network.target
+
+[Service]
+Type=exec
+User=user-api
+Group=user-api
+WorkingDirectory=/opt/user-api
+Environment=USERS_FILE=/opt/user-api/users.json
+Environment=LOG_FILE=/var/log/user-api/requests.jsonl
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/user-api/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=2
+
+# Seul endroit inscriptible : /var/log/user-api (créé par systemd)
+LogsDirectory=user-api
+LogsDirectoryMode=0750
+UMask=0077
+
+# Système de fichiers
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+NoExecPaths=/
+ExecPaths=/usr /opt/user-api/venv
+
+# Noyau / système
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+PrivateIPC=yes
+PrivateUsers=yes
+
+# Privilèges
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+
+# Réseau : écoute uniquement 127.0.0.1:8000, ne parle qu'à localhost
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+SocketBindDeny=any
+SocketBindAllow=tcp:8000
+
+# Appels système
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+# Ressources
+MemoryMax=256M
+TasksMax=32
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import json
+import os
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
+
+USERS_FILE = os.environ.get("USERS_FILE", "users.json")
+LOG_FILE = os.environ.get("LOG_FILE", "requests.jsonl")
+
+with open(USERS_FILE) as f:
+    USERS = json.load(f)
+
+# Pas de /docs ni /openapi.json : toute URL autre que POST /user est inconnue
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+
+class UserBody(BaseModel):
+    username: str
+
+
+@app.middleware("http")
+async def log_request(request: Request, call_next):
+    response = await call_next(request)
+    known = request.method == "POST" and request.url.path == "/user"
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": "user_lookup" if known else "unknown_url",
+        "ip": request.client.host if request.client else None,
+        "method": request.method,
+        "path": request.url.path,
+        "username": getattr(request.state, "username", None),
+        "status": response.status_code,
+    }
+    with open(LOG_FILE, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    return response
+
+
+@app.post("/user")
+def get_user(body: UserBody, request: Request):
+    request.state.username = body.username
+    if body.username not in USERS:
+        raise HTTPException(status_code=404)
+    return USERS[body.username]
+
+
+
+
+
+
+
+
+
